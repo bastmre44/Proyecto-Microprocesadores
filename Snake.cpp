@@ -94,3 +94,51 @@ void mostrar_instrucciones() {
     pthread_mutex_unlock(&mtx_pantalla);
 }
 
+
+// LÓGICA DE JUEGO, HILOS Y MAIN
+// ==================================================
+int rnd(int a, int b) { return a + rand() % (b - a + 1); }
+bool insideField(int x, int y) { return (x > 0 && x < W-1 && y > 0 && y < H-1); }
+
+bool collisionWith(const vector<Coord>& body, int x, int y) {
+    for (const auto& c: body) if (c.x==x && c.y==y) return true;
+    return false;
+}
+bool cellOccupied(int x, int y) {
+    return collisionWith(s1.body, x, y) || collisionWith(s2.body, x, y);
+}
+bool onTrap(int x, int y) {
+    for (const auto& t: traps) if (t.x==x && t.y==y) return true;
+    return false;
+}
+void placeFood() {
+    while (true) {
+        int x = rnd(1, W-2), y = rnd(1, H-2);
+        if (!cellOccupied(x,y) && !onTrap(x,y)) { food = {x,y}; return; }
+    }
+}
+void genTraps(int n) {
+    traps.clear();
+    for (int i=0;i<n;i++) {
+        int x = rnd(1, W-2), y = rnd(1, H-2);
+        if (!cellOccupied(x,y) && !(x==food.x && y==food.y))
+            traps.push_back({x,y});
+    }
+}
+void resetGame() {
+    pthread_mutex_lock(&mtx_state);
+    s1 = SnakeState(); s2 = SnakeState();
+    s1.id = 1; s1.headCh='O'; s1.bodyCh='o'; s1.alive=true; s1.dir=3;
+    s2.id = 2; s2.headCh='Q'; s2.bodyCh='q'; s2.alive=true; s2.dir=2;
+
+    s1.body = {{W/2, H/2}, {W/2-1,H/2}, {W/2-2,H/2}};
+    s2.body = {{W/2, H/2 - 5}, {W/2+1, H/2 -5}, {W/2+2, H/2 -5}};
+
+    s1.score = s2.score = 0;
+    level_ = 1;
+    time_left = TIMER_START;
+    placeFood();
+    traps.clear();
+    game_running = true;
+    pthread_mutex_unlock(&mtx_state);
+}
