@@ -49,7 +49,7 @@ pthread_mutex_t mtx_pantalla = PTHREAD_MUTEX_INITIALIZER;
 
 
 
-//Menú + Instrucciones + setup.
+//Menú e Instrucciones 
 
 
 void iniciar_ncurses() {
