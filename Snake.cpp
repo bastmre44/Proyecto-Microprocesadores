@@ -1,14 +1,13 @@
-/*---------------------------------------------------
-* UNIVERSIDAD DEL VALLE DE GUATEMALA
-* CC3086 - Programación de Microprocesadores
-* Proyecto 1 – Snake (ncurses + pthreads)
-*
-* Integrantes:
-*  - Adriana Martínez  (24086)
-*  - Mishell Ciprian   (231169)
-*  - Belén Monterroso  (231497)
-*  - Pablo Cabrera     (231156)
-*---------------------------------------------------*/
+//---------------------------------------------------
+// UNIVERSIDAD DEL VALLE DE GUATEMALA
+// CC3086 - Programación de Microprocesadores
+// Proyecto 1 – Snake
+// Integrantes:
+//  - Adriana Martínez
+//  - Mishell Ciprian
+//  - Belén Monterroso
+//  - Pablo Cabrera
+//---------------------------------------------------
 
 #include <ncurses.h>
 #include <pthread.h>
@@ -18,71 +17,109 @@
 #include <vector>
 #include <string>
 #include <fstream>
-#include <algorithm> 
 using namespace std;
 
-// ==================================================
-// Estructuras principales
-// ==================================================
-struct Coord { int x, y; };
+// Estructuras y variables compartidas
 
-struct SnakeState {
-    vector<Coord> body;
-    int dir = -1;         // 0=up,1=down,2=left,3=right
-    int score = 0;
-    bool alive = true;
-    char headCh = 'O';
-    char bodyCh = 'o';
-    int id = 1;           // 1 o 2
+struct Coordenada {
+    int x, y;
 };
 
-// Constantes globales
-const int W = 60;
-const int H = 24;
-const int HUDY = H + 1;
-const int TIMER_START = 40;
+struct EstadoSerpiente {
+    vector<Coordenada> cuerpo;
+    int direccion; // 0=arriba,1=abajo,2=izq,3=der
+    int puntaje;
+    bool viva;
+};
 
-// Variables globales
-SnakeState s1, s2;
-Coord food;
-vector<Coord> traps;
-int game_mode = 1;
-int level_ = 1;
-int speed_ms = 150;
-int time_left = TIMER_START;
-bool game_running = false;
-bool quit_program = false;
-bool show_next_level = false; // transición de niveles
+EstadoSerpiente serp1, serp2;
+Coordenada comida;
+vector<Coordenada> trampas;
+
+int modo_juego = 1;
+int nivel = 1;
+int velocidad = 150; // milisegundos
+int tiempo_restante = 40;
+bool juego_activo = true;
 
 // Mutex
-pthread_mutex_t mtx_state = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mtx_scr   = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mtx_estado = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mtx_pantalla = PTHREAD_MUTEX_INITIALIZER;
 
-// ==================================================
-// Representación gráfica básica
-// ==================================================
-void drawBorders() {
-    for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-'); }
-    for (int y=0; y<H; ++y) { mvaddch(y, 0, '|'); mvaddch(y, W-1, '|'); }
+
+
+
+//Menú e Instrucciones 
+
+
+void iniciar_ncurses() {
+    initscr(); cbreak(); noecho();
+    keypad(stdscr, TRUE);
+    nodelay(stdscr, TRUE);
+    curs_set(0);
+    srand((unsigned)time(nullptr));
 }
 
-void drawHUD() {
-    mvprintw(HUDY, 0, "Nivel:%d  Vel:%dms  Tiempo:%02d   P1:%d   P2:%d   Modo:%d",
-             level_, speed_ms, time_left, s1.score, s2.score, game_mode);
+void finalizar_ncurses() {
+    endwin();
 }
 
-void drawFood() { mvaddch(food.y, food.x, '@'); }
-void drawTraps() { for (auto& t: traps) mvaddch(t.y, t.x, 'X'); }
-void drawSnake(const SnakeState& s) {
-    if (!s.body.empty()) {
-        mvaddch(s.body[0].y, s.body[0].x, s.headCh);
-        for (size_t i=1;i<s.body.size();++i) mvaddch(s.body[i].y, s.body[i].x, s.bodyCh);
+void mostrar_menu() {
+    pthread_mutex_lock(&mtx_pantalla);
+    clear();
+    mvprintw(2, 10, "===============================");
+    mvprintw(3, 10, "        S N A K E   G A M E    ");
+    mvprintw(4, 10, "===============================");
+    mvprintw(6, 12, "1. Un jugador");
+    mvprintw(7, 12, "2. Dos jugadores");
+    mvprintw(8, 12, "3. Seleccionar dificultad");
+    mvprintw(9, 12, "4. Puntajes destacados");
+    mvprintw(10, 12, "5. Instrucciones");
+    mvprintw(11, 12, "6. Salir");
+    refresh();
+    pthread_mutex_unlock(&mtx_pantalla);
+}
+
+void mostrar_instrucciones() {
+    pthread_mutex_lock(&mtx_pantalla);
+    clear();
+    mvprintw(2, 5, "Instrucciones del Juego:");
+    mvprintw(4, 5, "Jugador 1: WASD");
+    mvprintw(5, 5, "Jugador 2: Flechas de direccion");
+    mvprintw(6, 5, "Come la comida (@) para crecer");
+    mvprintw(7, 5, "Evita las trampas (X), muros y tu propio cuerpo");
+    mvprintw(9, 5, "Presiona cualquier tecla para volver al menu...");
+    refresh();
+    getch();
+    pthread_mutex_unlock(&mtx_pantalla);
+}
+
+// La representación en la consola 
+void drawBorders(){
+    for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-');}
+    for (int y=0; y<H; ++y) { mvaddch(y, 0, '|'); mvaddch(y, W-1, '|') ;}
+}
+
+void drawHUD(){
+    mvprintw(HUDY, 0, "Nivel:%d  Vel:%dms  Tiempo:%02d   P1:%d   P2:%d   Modo:%d" ,
+             level_, speed_ms, time_left, s1.score, s2.score, game_mode ) ;
+}
+
+void drawFood(){ mvaddch(food.y, food.x, '@') ; }
+
+void drawTraps(){ for(auto& t: traps) mvaddch(t.y, t.x, 'X'); }
+
+void drawSnake(const SnakeState& s){
+    if(!s.body.empty()){
+        mvaddch(s.body[0].y , s.body[0].x, s.headCh);
+        for (size_t i=1;i<s.body.size();++i) mvaddch(s.body[i].y, s.body[i].x, s.bodyCh) ;
     }
 }
-void clearCell(int x, int y) { mvaddch(y, x, ' '); }
 
-// ==================================================
-// Utilidades
+void clearCell(int x, int y){ mvaddch(y, x, ' ') ; }
+
+
+// LÓGICA DE JUEGO, HILOS Y MAIN
 // ==================================================
 int rnd(int a, int b) { return a + rand() % (b - a + 1); }
 bool insideField(int x, int y) { return (x > 0 && x < W-1 && y > 0 && y < H-1); }
@@ -125,193 +162,65 @@ void resetGame() {
     level_ = 1;
     time_left = TIMER_START;
     placeFood();
-    genTraps(level_-1);
+    traps.clear();
     game_running = true;
     pthread_mutex_unlock(&mtx_state);
 }
 
-// ==================================================
-// Movimiento serpiente
-// ==================================================
+// ---- Lógica de serpientes y colisiones ----
 void eraseSnakeTail(const SnakeState& s) {
     if (!s.body.empty()) clearCell(s.body.back().x, s.body.back().y);
 }
 void advanceSnake(SnakeState& s) {
     if (!s.alive || s.dir==-1 || s.body.empty()) return;
-
     Coord head = s.body[0];
     switch (s.dir) { case 0: head.y--; break; case 1: head.y++; break;
                      case 2: head.x--; break; case 3: head.x++; break; }
-
-    // Colisiones con bordes/trampas
     if (!insideField(head.x, head.y) || onTrap(head.x, head.y)) { s.alive=false; return; }
-
-    // Colisión consigo misma (sobre estado actual)
-    for (const auto& c: s.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
-
-    // Colisión con la otra serpiente
+    for (auto& c: s.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
     SnakeState& other = (s.id==1 ? s2 : s1);
-    for (const auto& c: other.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
+    for (auto& c: other.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
 
     bool ate = (head.x==food.x && head.y==food.y);
-
-    // Si NO comió, borra la cola ANTES de desplazar
-    if (!ate) eraseSnakeTail(s);
-
-    // Desplaza el cuerpo
-    for (int i=(int)s.body.size()-1;i>0;--i) s.body[i]=s.body[i-1];
+    if (ate) { s.score += 7; } else {
+        eraseSnakeTail(s);
+        for (int i=(int)s.body.size()-1;i>0;--i) s.body[i]=s.body[i-1];
+    }
     s.body[0] = head;
-
-    if (ate) {
-        s.score += 7;
-        s.body.push_back(s.body.back()); // crece
-        placeFood();
-    }
+    if (ate) placeFood();
 }
 
-// ==================================================
-// Menú, instrucciones, puntajes, dificultad
-// ==================================================
-void showMenu() {
-    pthread_mutex_lock(&mtx_scr);
-    clear();
-    mvprintw(3, 20, "==============================");
-    mvprintw(4, 20, "         S N A K E");
-    mvprintw(5, 20, "==============================");
-    mvprintw(8, 22, "1. Un jugador");
-    mvprintw(9, 22, "2. Dos jugadores");
-    mvprintw(10,22, "3. Seleccionar dificultad");
-    mvprintw(11,22, "4. Puntajes destacados");
-    mvprintw(12,22, "5. Instrucciones");
-    mvprintw(13,22, "6. Salir");
-    refresh();
-    pthread_mutex_unlock(&mtx_scr);
-}
-
-void showInstructions() {
-    pthread_mutex_lock(&mtx_scr);
-    clear();
-    mvprintw(2, 5, "Instrucciones del Juego:");
-    mvprintw(4, 5, "Jugador 1: WASD");
-    mvprintw(5, 5, "Jugador 2: Flechas");
-    mvprintw(6, 5, "Comida: @  (+7 puntos)");
-    mvprintw(7, 5, "Trampas: X  (pierdes)");
-    mvprintw(8, 5, "Cada %ds sube el nivel con +velocidad y trampas.", TIMER_START);
-    mvprintw(10,5, "Presiona cualquier tecla para ir al menu...");
-    refresh();
-    getch();
-    pthread_mutex_unlock(&mtx_scr);
-}
-
-void showDifficulty() {
-    pthread_mutex_lock(&mtx_scr);
-    clear();
-    mvprintw(4, 10, "Selecciona dificultad:");
-    mvprintw(6, 12, "1. Facil   (200 ms)");
-    mvprintw(7, 12, "2. Media   (150 ms)");
-    mvprintw(8, 12, "3. Dificil (100 ms)");
-    refresh();
-    int ch = getch();
-    if (ch=='1') speed_ms = 200;
-    else if (ch=='2') speed_ms = 150;
-    else if (ch=='3') speed_ms = 100;
-    pthread_mutex_unlock(&mtx_scr);
-}
-
-void saveScore(const string& label) {
-    ofstream f("scores.txt", ios::app);
-    if (!f) return;
-    time_t now = time(nullptr);
-    f << label << " | lvl:" << level_ << " | p1:" << s1.score << " | p2:" << s2.score
-      << " | " << ctime(&now);
-}
-
-void showScores() {
-    pthread_mutex_lock(&mtx_scr);
-    clear();
-    mvprintw(1, 2, "=== Puntajes destacados ===");
-    ifstream f("scores.txt");
-    string line; int row=3;
-    if (f) {
-        vector<string> lines;
-        while (getline(f, line)) lines.push_back(line);
-        int start = max(0, (int)lines.size()-15);
-        for (int i=start;i<(int)lines.size();++i) {
-            mvprintw(row++, 2, "%s", lines[i].c_str());
-        }
-    } else {
-        mvprintw(3,2,"(No se pudo abrir scores.txt)");
-    }
-    mvprintw(row+2,2,"Presiona una tecla...");
-    refresh();
-    getch();
-    pthread_mutex_unlock(&mtx_scr);
-}
-
-// ==================================================
-// GAME OVER simple
-// ==================================================
-bool gameOverScreen() {
-    pthread_mutex_lock(&mtx_scr);
-    clear();
-    mvprintw(6, 15, "=== GAME OVER ===");
-    mvprintw(8, 15, "P1: %d   P2: %d   (Nivel %d)", s1.score, s2.score, level_);
-    mvprintw(10,15, "1. Volver al menu");
-    mvprintw(11,15, "2. Salir");
-    refresh();
-    int ch = getch();
-    pthread_mutex_unlock(&mtx_scr);
-    return (ch=='1');
-}
-
-// ==================================================
-// Hilos principales
-// ==================================================
+// ---- Hilos ----
 void* th_snake(void* arg) {
     SnakeState* S = (SnakeState*)arg;
-    bool isPainter = (S->id == 1); // solo serpiente 1 dibuja
     while (true) {
         pthread_mutex_lock(&mtx_state);
         bool running = game_running;
-        bool showNL = show_next_level;
         pthread_mutex_unlock(&mtx_state);
         if (!running) break;
 
         pthread_mutex_lock(&mtx_state);
-        if (!showNL) advanceSnake(*S);
+        advanceSnake(*S);
         bool sAlive = S->alive;
         pthread_mutex_unlock(&mtx_state);
 
-        if (isPainter) {
-            pthread_mutex_lock(&mtx_scr);
-            clear();
-            if (showNL) {
-                mvprintw(H/2-1, (W/2)-5, "=== NEXT LEVEL ===");
-                mvprintw(H/2+1, (W/2)-7, "Entrando al nivel %d...", level_);
-            } else {
-                drawBorders(); drawFood(); drawTraps();
-                drawSnake(s1); if (game_mode==2) drawSnake(s2);
-                drawHUD();
-            }
-            refresh();
-            pthread_mutex_unlock(&mtx_scr);
-        }
+        pthread_mutex_lock(&mtx_scr);
+        clear(); drawBorders(); drawFood(); drawTraps();
+        drawSnake(s1); if (game_mode==2) drawSnake(s2);
+        drawHUD(); refresh();
+        pthread_mutex_unlock(&mtx_scr);
 
-        if (!sAlive) break;
+        if (!sAlive) { pthread_mutex_lock(&mtx_state); game_running=false; pthread_mutex_unlock(&mtx_state); break; }
         usleep(speed_ms * 1000);
     }
     return nullptr;
 }
-
 void* th_input(void* arg) {
     nodelay(stdscr, TRUE);
     while (true) {
-        pthread_mutex_lock(&mtx_state); 
-        bool running=game_running, showNL=show_next_level; 
-        pthread_mutex_unlock(&mtx_state);
+        pthread_mutex_lock(&mtx_state); bool running=game_running; pthread_mutex_unlock(&mtx_state);
         if (!running) break;
-        if (showNL) { usleep(20*1000); continue; }
-        pthread_mutex_lock(&mtx_scr); int ch=getch(); pthread_mutex_unlock(&mtx_scr);
+        pthread_mutex_lock(&mtx_scr); int ch = getch(); pthread_mutex_unlock(&mtx_scr);
         if (ch != ERR) {
             pthread_mutex_lock(&mtx_state);
             if (ch=='w'||ch=='W') { if (s1.dir!=1) s1.dir=0; }
@@ -328,7 +237,6 @@ void* th_input(void* arg) {
     }
     return nullptr;
 }
-
 void* th_food(void* arg) {
     int ticks=0;
     while (true) {
@@ -339,34 +247,20 @@ void* th_food(void* arg) {
     }
     return nullptr;
 }
-
 void* th_timer(void* arg) {
-    int counterNL = 0;
     while (true) {
         sleep(1);
         pthread_mutex_lock(&mtx_state);
         if (!game_running) { pthread_mutex_unlock(&mtx_state); break; }
-
-        if (show_next_level) {
-            counterNL++;
-            if (counterNL>=2) { show_next_level = false; counterNL=0; }
-            pthread_mutex_unlock(&mtx_state);
-            continue;
-        }
-
         time_left--;
         if (time_left<=0) {
-            level_++;
-            if (speed_ms>60) speed_ms-=10;
-            time_left=TIMER_START;
-            genTraps(max(0, level_-2));
-            show_next_level = true;
+            level_++; if (speed_ms>60) speed_ms-=10;
+            time_left=TIMER_START; genTraps(max(0, level_-2));
         }
         pthread_mutex_unlock(&mtx_state);
     }
     return nullptr;
 }
-
 void* th_traps_regen(void* arg) {
     while (true) {
         pthread_mutex_lock(&mtx_state); bool running=game_running; int ntr=max(0, level_-2); pthread_mutex_unlock(&mtx_state);
@@ -376,13 +270,9 @@ void* th_traps_regen(void* arg) {
     return nullptr;
 }
 
-// ==================================================
-// Inicio y cierre de partida
-// ==================================================
+// ---- Arranque de partida ----
 void startGame(int mode) {
-    game_mode=mode; 
-    resetGame();
-
+    game_mode=mode; resetGame();
     pthread_t tS1,tS2,tIn,tFd,tTm,tTr;
     pthread_create(&tS1,nullptr,th_snake,&s1);
     if (mode==2) pthread_create(&tS2,nullptr,th_snake,&s2);
@@ -393,57 +283,36 @@ void startGame(int mode) {
 
     while (true) {
         pthread_mutex_lock(&mtx_state);
-        bool end1P = (game_mode==1 && !s1.alive);
-        bool end2P = (game_mode==2 && !s1.alive && !s2.alive);
-        bool endGame = end1P || end2P;
+        bool running=game_running, bothDead=(!s1.alive)||(mode==2&&!s2.alive);
         pthread_mutex_unlock(&mtx_state);
-        if (endGame) break;
+        if (!running||bothDead) break;
         usleep(100*1000);
     }
-
-    // ✅ Apagar bandera antes de join
-    pthread_mutex_lock(&mtx_state);
-    game_running = false;
-    pthread_mutex_unlock(&mtx_state);
-
+    pthread_mutex_lock(&mtx_state); game_running=false; pthread_mutex_unlock(&mtx_state);
     pthread_join(tS1,nullptr); if (mode==2) pthread_join(tS2,nullptr);
     pthread_join(tIn,nullptr); pthread_join(tFd,nullptr); pthread_join(tTm,nullptr); pthread_join(tTr,nullptr);
 
     saveScore(mode==1?string("Snake 1P"):string("Snake 2P"));
-    bool backToMenu=gameOverScreen(); 
-    if (!backToMenu) quit_program=true;
+    bool backToMenu=gameOverScreen(); if (!backToMenu) quit_program=true;
 }
 
-// ==================================================
-// ncurses init/fin y main
-// ==================================================
-void init_ncurses() { 
-    initscr(); 
-    cbreak(); 
-    noecho(); 
-    keypad(stdscr,TRUE); 
-    nodelay(stdscr,FALSE); 
-    curs_set(0); 
-    srand(time(nullptr)); 
-}
+// ---- Inicialización ncurses y main ----
+void init_ncurses() { initscr(); cbreak(); noecho(); keypad(stdscr,TRUE); nodelay(stdscr,FALSE); curs_set(0); srand(time(nullptr)); }
 void end_ncurses() { endwin(); }
 
 int main() {
     init_ncurses();
-    showInstructions();  // muestra instrucciones al inicio
-
+    showInstructions();
     while (!quit_program) {
         showMenu();
-        int op = getch();
+        int op=getch();
         if (op=='1') startGame(1);
         else if (op=='2') startGame(2);
         else if (op=='3') showDifficulty();
         else if (op=='4') showScores();
         else if (op=='5') showInstructions();
-        else if (op=='6') quit_program = true;
-        // ignora otras teclas
+        else if (op=='6') quit_program=true;
     }
-
     end_ncurses();
     return 0;
 }
