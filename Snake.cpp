@@ -95,15 +95,28 @@ void mostrar_instrucciones() {
 }
 
 // La representación en la consola 
-void drawBorders() {
-    for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-'); }
-    for (int y=0; y<H; ++y) { mvaddch(y, 0, '|'); mvaddch(y, W-1, '|'); }
+void drawBorders(){
+    for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-');}
+    for (int y=0; y<H; ++y) { mvaddch(y, 0, '|'); mvaddch(y, W-1, '|') ;}
 }
 
-void drawHUD() {
-    mvprintw(HUDY, 0, "Nivel:%d  Vel:%dms  Tiempo:%02d   P1:%d   P2:%d   Modo:%d",
-             level_, speed_ms, time_left, s1.score, s2.score, game_mode);
+void drawHUD(){
+    mvprintw(HUDY, 0, "Nivel:%d  Vel:%dms  Tiempo:%02d   P1:%d   P2:%d   Modo:%d" ,
+             level_, speed_ms, time_left, s1.score, s2.score, game_mode ) ;
 }
+
+void drawFood(){ mvaddch(food.y, food.x, '@') ; }
+
+void drawTraps(){ for(auto& t: traps) mvaddch(t.y, t.x, 'X'); }
+
+void drawSnake(const SnakeState& s){
+    if(!s.body.empty()){
+        mvaddch(s.body[0].y , s.body[0].x, s.headCh);
+        for (size_t i=1;i<s.body.size();++i) mvaddch(s.body[i].y, s.body[i].x, s.bodyCh) ;
+    }
+}
+
+void clearCell(int x, int y){ mvaddch(y, x, ' ') ; }
 
 
 // LÓGICA DE JUEGO, HILOS Y MAIN
