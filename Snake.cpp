@@ -94,6 +94,17 @@ void mostrar_instrucciones() {
     pthread_mutex_unlock(&mtx_pantalla);
 }
 
+// La representación en la consola 
+void drawBorders() {
+    for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-'); }
+    for (int y=0; y<H; ++y) { mvaddch(y, 0, '|'); mvaddch(y, W-1, '|'); }
+}
+
+void drawHUD() {
+    mvprintw(HUDY, 0, "Nivel:%d  Vel:%dms  Tiempo:%02d   P1:%d   P2:%d   Modo:%d",
+             level_, speed_ms, time_left, s1.score, s2.score, game_mode);
+}
+
 
 // LÓGICA DE JUEGO, HILOS Y MAIN
 // ==================================================
