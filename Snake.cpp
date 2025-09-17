@@ -18,7 +18,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
-#include <algorithm> 
+#include <algorithm>
 using namespace std;
 
 // ==================================================
@@ -52,14 +52,14 @@ int speed_ms = 150;
 int time_left = TIMER_START;
 bool game_running = false;
 bool quit_program = false;
-bool show_next_level = false; // transición de niveles
+bool show_next_level = false;
 
 // Mutex
 pthread_mutex_t mtx_state = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mtx_scr   = PTHREAD_MUTEX_INITIALIZER;
 
 // ==================================================
-// Representación gráfica básica
+// Representación gráfica 
 // ==================================================
 void drawBorders() {
     for (int x=0; x<W; ++x) { mvaddch(0, x, '-'); mvaddch(H-1, x, '-'); }
@@ -84,39 +84,70 @@ void clearCell(int x, int y) { mvaddch(y, x, ' '); }
 // ==================================================
 // Utilidades
 // ==================================================
-int rnd(int a, int b) { return a + rand() % (b - a + 1); }
-bool insideField(int x, int y) { return (x > 0 && x < W-1 && y > 0 && y < H-1); }
+
+int rnd(int a, int b) { 
+    return a + rand() % (b - a + 1); 
+}
+
+bool insideField(int x, int y) { 
+    return (x > 0 && x < W-1 && y > 0 && y < H-1); 
+}
 
 bool collisionWith(const vector<Coord>& body, int x, int y) {
-    for (const auto& c: body) if (c.x==x && c.y==y) return true;
+    for (const auto& c: body) 
+        if (c.x==x && c.y==y) return true;
     return false;
 }
+
 bool cellOccupied(int x, int y) {
     return collisionWith(s1.body, x, y) || collisionWith(s2.body, x, y);
 }
+
 bool onTrap(int x, int y) {
-    for (const auto& t: traps) if (t.x==x && t.y==y) return true;
+    for (const auto& t: traps) 
+        if (t.x==x && t.y==y) return true;
     return false;
 }
+
 void placeFood() {
     while (true) {
         int x = rnd(1, W-2), y = rnd(1, H-2);
-        if (!cellOccupied(x,y) && !onTrap(x,y)) { food = {x,y}; return; }
+        if (!cellOccupied(x,y) && !onTrap(x,y)) { 
+            food = {x,y}; 
+            return; 
+        }
     }
 }
-void genTraps(int n) {
-    traps.clear();
-    for (int i=0;i<n;i++) {
-        int x = rnd(1, W-2), y = rnd(1, H-2);
-        if (!cellOccupied(x,y) && !(x==food.x && y==food.y))
-            traps.push_back({x,y});
+
+// Número máximo de trampas según el nivel
+int maxTrapsForLevel() {
+    return 3 + (level_ - 1); // nivel 1: 3 trampas, nivel 2: 4, etc.
+}
+
+// Agregar UNA trampa progresivamente
+void addTrap() {
+    int x, y;
+    int tries = 0;
+    do {
+        x = rnd(1, W-2);
+        y = rnd(1, H-2);
+        tries++;
+        if (tries > 500) break; // 
+    } while (cellOccupied(x,y) || onTrap(x,y) || (x==food.x && y==food.y));
+
+    if (insideField(x,y) && !cellOccupied(x,y) && !onTrap(x,y) && !(x==food.x && y==food.y)) {
+        traps.push_back({x,y});
     }
 }
+
+// Reinicio de partida
 void resetGame() {
     pthread_mutex_lock(&mtx_state);
-    s1 = SnakeState(); s2 = SnakeState();
+
+    s1 = SnakeState(); 
+    s2 = SnakeState();
     s1.id = 1; s1.headCh='O'; s1.bodyCh='o'; s1.alive=true; s1.dir=3;
-    s2.id = 2; s2.headCh='Q'; s2.bodyCh='q'; s2.alive=true; s2.dir=2;
+    s2.id = 2; s2.headCh='#'; s2.bodyCh='+'; s2.alive=true; s2.dir=2;  // serpiente 2
 
     s1.body = {{W/2, H/2}, {W/2-1,H/2}, {W/2-2,H/2}};
     s2.body = {{W/2, H/2 - 5}, {W/2+1, H/2 -5}, {W/2+2, H/2 -5}};
@@ -125,7 +156,10 @@ void resetGame() {
     level_ = 1;
     time_left = TIMER_START;
     placeFood();
-    genTraps(level_-1);
+
+    traps.clear();     
+    addTrap();         // arranca con 1 trampa
+
     game_running = true;
     pthread_mutex_unlock(&mtx_state);
 }
@@ -143,51 +177,59 @@ void advanceSnake(SnakeState& s) {
     switch (s.dir) { case 0: head.y--; break; case 1: head.y++; break;
                      case 2: head.x--; break; case 3: head.x++; break; }
 
-    // Colisiones con bordes/trampas
     if (!insideField(head.x, head.y) || onTrap(head.x, head.y)) { s.alive=false; return; }
-
-    // Colisión consigo misma (sobre estado actual)
     for (const auto& c: s.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
-
-    // Colisión con la otra serpiente
     SnakeState& other = (s.id==1 ? s2 : s1);
     for (const auto& c: other.body) if (head.x==c.x && head.y==c.y) { s.alive=false; return; }
 
     bool ate = (head.x==food.x && head.y==food.y);
-
-    // Si NO comió, borra la cola ANTES de desplazar
     if (!ate) eraseSnakeTail(s);
 
-    // Desplaza el cuerpo
     for (int i=(int)s.body.size()-1;i>0;--i) s.body[i]=s.body[i-1];
     s.body[0] = head;
 
     if (ate) {
         s.score += 7;
-        s.body.push_back(s.body.back()); // crece
+        s.body.push_back(s.body.back());
         placeFood();
     }
 }
 
 // ==================================================
-// Menú, instrucciones, puntajes, dificultad
+// Menú con título personalizado
 // ==================================================
 void showMenu() {
     pthread_mutex_lock(&mtx_scr);
     clear();
-    mvprintw(3, 20, "==============================");
-    mvprintw(4, 20, "         S N A K E");
-    mvprintw(5, 20, "==============================");
-    mvprintw(8, 22, "1. Un jugador");
-    mvprintw(9, 22, "2. Dos jugadores");
-    mvprintw(10,22, "3. Seleccionar dificultad");
-    mvprintw(11,22, "4. Puntajes destacados");
-    mvprintw(12,22, "5. Instrucciones");
-    mvprintw(13,22, "6. Salir");
+
+    mvprintw(1, 5,  "Jennifer E. Swofford");
+    mvprintw(2, 5,  "                      __    __    __    __");
+    mvprintw(3, 5,  "                     /  \\  /  \\  /  \\  /  \\");
+    mvprintw(4, 5,  "____________________/  __\\/  __\\/  __\\/  __\\_____________________________");
+    mvprintw(5, 5,  "___________________/  /__/  /__/  /__/  /________________________________");
+    mvprintw(6, 5,  "                   | / \\   / \\   / \\   / \\  \\____");
+    mvprintw(7, 5,  "                   |/   \\_/   \\_/   \\_/   \\    o \\");
+    mvprintw(8, 5,  "                                           \\_____/--<");
+    mvprintw(10,5,  ",adPPYba, 8b,dPPYba,  ,adPPYYba, 88   ,d8  ,adPPYba,");
+    mvprintw(11,5,  "I8[    \"\" 88P'   `\"8a \"\"     `Y8 88 ,a8\"  a8P_____88");
+    mvprintw(12,5,  " `\"Y8ba,  88       88 ,adPPPPP88 8888[    8PP\"\"\"\"\"\"\"");
+    mvprintw(13,5,  "aa    ]8I 88       88 88,    ,88 88`\"Yba, \"8b,   ,aa");
+    mvprintw(14,5,  "`\"YbbdP\"' 88       88 `\"8bbdP\"Y8 88   `Y8a `\"Ybbd8\"'");
+
+    mvprintw(17, 22, "1. Un jugador");
+    mvprintw(18, 22, "2. Dos jugadores");
+    mvprintw(19, 22, "3. Seleccionar dificultad");
+    mvprintw(20, 22, "4. Puntajes destacados");
+    mvprintw(21, 22, "5. Instrucciones");
+    mvprintw(22, 22, "6. Salir");
+
     refresh();
     pthread_mutex_unlock(&mtx_scr);
 }
 
+// ==================================================
+// Instrucciones, dificultad, puntajes
+// ==================================================
 void showInstructions() {
     pthread_mutex_lock(&mtx_scr);
     clear();
@@ -249,27 +291,52 @@ void showScores() {
 }
 
 // ==================================================
-// GAME OVER simple
+// Game Over
 // ==================================================
+
 bool gameOverScreen() {
     pthread_mutex_lock(&mtx_scr);
     clear();
-    mvprintw(6, 15, "=== GAME OVER ===");
-    mvprintw(8, 15, "P1: %d   P2: %d   (Nivel %d)", s1.score, s2.score, level_);
-    mvprintw(10,15, "1. Volver al menu");
-    mvprintw(11,15, "2. Salir");
+
+    // ASCII del Game Over
+    mvprintw(2, 5, "  __ _  __ _ _ __ ___   ___    _____   _____ _ __  ");
+    mvprintw(3, 5, " / _` |/ _` | '_ ` _ \\ / _ \\  / _ \\ \\ / / _ \\ '__| ");
+    mvprintw(4, 5, "| (_| | (_| | | | | | |  __/ | (_) \\ V /  __/ |    ");
+    mvprintw(5, 5, " \\__, |\\__,_|_| |_| |_|\\___|  \\___/ \\_/ \\___|_|    ");
+    mvprintw(6, 5, " |___/                                              ");
+
+    // Puntajes
+    mvprintw(9, 10, "Resultados finales:");
+    mvprintw(11, 12, "Jugador 1: %d puntos", s1.score);
+    if (game_mode == 2)
+        mvprintw(12, 12, "Jugador 2: %d puntos", s2.score);
+    mvprintw(14, 12, "Nivel alcanzado: %d", level_);
+
+    // Opciones
+    mvprintw(17, 10, "¿Qué deseas hacer?");
+    mvprintw(19, 12, "1. Volver al menú");
+    mvprintw(20, 12, "2. Salir");
+
     refresh();
-    int ch = getch();
+
+    // Esperar opción
+    int ch;
+    do {
+        ch = getch();
+    } while (ch != '1' && ch != '2');
+
     pthread_mutex_unlock(&mtx_scr);
-    return (ch=='1');
+
+    return (ch == '1'); // true = volver al menú, false = salir
 }
+
 
 // ==================================================
 // Hilos principales
 // ==================================================
 void* th_snake(void* arg) {
     SnakeState* S = (SnakeState*)arg;
-    bool isPainter = (S->id == 1); // solo serpiente 1 dibuja
+    bool isPainter = (S->id == 1);
     while (true) {
         pthread_mutex_lock(&mtx_state);
         bool running = game_running;
@@ -345,11 +412,17 @@ void* th_timer(void* arg) {
     while (true) {
         sleep(1);
         pthread_mutex_lock(&mtx_state);
-        if (!game_running) { pthread_mutex_unlock(&mtx_state); break; }
+        if (!game_running) { 
+            pthread_mutex_unlock(&mtx_state); 
+            break; 
+        }
 
         if (show_next_level) {
             counterNL++;
-            if (counterNL>=2) { show_next_level = false; counterNL=0; }
+            if (counterNL>=2) { 
+                show_next_level = false; 
+                counterNL=0; 
+            }
             pthread_mutex_unlock(&mtx_state);
             continue;
         }
@@ -358,8 +431,9 @@ void* th_timer(void* arg) {
         if (time_left<=0) {
             level_++;
             if (speed_ms>60) speed_ms-=10;
-            time_left=TIMER_START;
-            genTraps(max(0, level_-2));
+            time_left = TIMER_START;
+            // 🚫 antes llamabas a genTraps(...) aquí
+            // ✅ ahora no, porque th_traps_regen se encarga
             show_next_level = true;
         }
         pthread_mutex_unlock(&mtx_state);
@@ -369,9 +443,23 @@ void* th_timer(void* arg) {
 
 void* th_traps_regen(void* arg) {
     while (true) {
-        pthread_mutex_lock(&mtx_state); bool running=game_running; int ntr=max(0, level_-2); pthread_mutex_unlock(&mtx_state);
+        pthread_mutex_lock(&mtx_state);
+        bool running = game_running;
+        bool showNL  = show_next_level;
+        int desired  = maxTrapsForLevel();
+        int current  = (int)traps.size();
+        pthread_mutex_unlock(&mtx_state);
+
         if (!running) break;
-        sleep(3); pthread_mutex_lock(&mtx_state); genTraps(ntr); pthread_mutex_unlock(&mtx_state);
+
+        if (!showNL && current < desired) {
+            pthread_mutex_lock(&mtx_state);
+            addTrap();
+            pthread_mutex_unlock(&mtx_state);
+            sleep(2); // aparecen una por una cada 2s
+        } else {
+            sleep(1);
+        }
     }
     return nullptr;
 }
@@ -401,7 +489,6 @@ void startGame(int mode) {
         usleep(100*1000);
     }
 
-    // ✅ Apagar bandera antes de join
     pthread_mutex_lock(&mtx_state);
     game_running = false;
     pthread_mutex_unlock(&mtx_state);
@@ -430,20 +517,32 @@ void end_ncurses() { endwin(); }
 
 int main() {
     init_ncurses();
-    showInstructions();  // muestra instrucciones al inicio
+    showInstructions();
 
     while (!quit_program) {
+        
+        pthread_mutex_lock(&mtx_scr);
+        nodelay(stdscr, FALSE);  // lectura bloqueante en menú
+        flushinp();              
+        pthread_mutex_unlock(&mtx_scr);
+
         showMenu();
-        int op = getch();
+
+        int op;
+        do {
+            op = getch();
+        } while (op != '1' && op != '2' && op != '3' && op != '4' && op != '5' && op != '6');
+
         if (op=='1') startGame(1);
         else if (op=='2') startGame(2);
         else if (op=='3') showDifficulty();
         else if (op=='4') showScores();
         else if (op=='5') showInstructions();
         else if (op=='6') quit_program = true;
-        // ignora otras teclas
     }
 
     end_ncurses();
     return 0;
 }
+
+
