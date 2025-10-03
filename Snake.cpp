@@ -22,6 +22,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <regex>
 using namespace std;
 
 // ==================================================
@@ -656,40 +657,33 @@ void showDifficulty() {
 }
 
 void showThemeSelector() {
+    auto paint = [&](){
+        clear();
+        attron(A_BOLD);
+        mvprintw(2, 20, "SELECCIONA UN TEMA VISUAL");
+        attroff(A_BOLD);
+
+        for (size_t i = 0; i < available_themes.size(); i++) {
+            if ((int)i == theme_index) attron(A_REVERSE | A_BOLD);
+            mvprintw(5 + (int)i*2, 15, "%zu. %s", i+1, available_themes[i].name.c_str());
+            mvprintw(5 + (int)i*2, 40, "Preview: ");
+            addch(available_themes[i].p1_head);
+            addch(available_themes[i].p1_body);
+            mvprintw(5 + (int)i*2, 50, "%c", available_themes[i].food_basic);
+            mvprintw(5 + (int)i*2, 53, "%c", available_themes[i].trap);
+            if ((int)i == theme_index) attroff(A_REVERSE | A_BOLD);
+        }
+        mvprintw(20, 15, "Flechas para navegar, ENTER para seleccionar");
+        refresh();
+    };
+
     pthread_mutex_lock(&mtx_scr);
-    clear();
-    
-    attron(A_BOLD);
-    mvprintw(2, 20, "SELECCIONA UN TEMA VISUAL");
-    attroff(A_BOLD);
-    
-    for (size_t i = 0; i < available_themes.size(); i++) {
-        if (i == theme_index) attron(A_REVERSE | A_BOLD);
-        
-        mvprintw(5 + i*2, 15, "%zu. %s", i+1, available_themes[i].name.c_str());
-        mvprintw(5 + i*2, 40, "Preview: ");
-        addch(available_themes[i].p1_head);
-        addch(available_themes[i].p1_body);
-        mvprintw(5 + i*2, 50, "%c", available_themes[i].food_basic);
-        mvprintw(5 + i*2, 53, "%c", available_themes[i].trap);
-        
-        if (i == theme_index) attroff(A_REVERSE | A_BOLD);
-    }
-    
-    mvprintw(20, 15, "Flechas para navegar, ENTER para seleccionar");
-    refresh();
-    
+    paint();
     bool selecting = true;
     while (selecting) {
         int ch = getch();
-        if (ch == KEY_UP && theme_index > 0) {
-            theme_index--;
-            showThemeSelector();
-        }
-        else if (ch == KEY_DOWN && theme_index < (int)available_themes.size() - 1) {
-            theme_index++;
-            showThemeSelector();
-        }
+        if (ch == KEY_UP && theme_index > 0) { theme_index--; paint(); }
+        else if (ch == KEY_DOWN && theme_index < (int)available_themes.size() - 1) { theme_index++; paint(); }
         else if (ch == '\n' || ch == '\r') {
             current_theme = available_themes[theme_index];
             applyThemeToSnakes();
@@ -697,31 +691,29 @@ void showThemeSelector() {
         }
         else if (ch == 27) selecting = false;
     }
-    
     pthread_mutex_unlock(&mtx_scr);
 }
+
+    
 
 vector<ScoreRecord> loadScores() {
     vector<ScoreRecord> records;
     ifstream f("scores.txt");
     if (!f) return records;
-    
+
+    // "label | lvl:<L> | p1:<S1> | p2:<S2> | <fecha>"
+    regex re(R"(^\s*(.*?)\s*\|\s*lvl:(\d+)\s*\|\s*p1:(\d+)\s*\|\s*p2:(\d+)\s*\|\s*(.*)\s*$)");
     string line;
+    smatch m;
     while (getline(f, line)) {
-        ScoreRecord rec;
-        size_t pos1 = line.find("lvl:");
-        size_t pos2 = line.find("p1:");
-        size_t pos3 = line.find("p2:");
-        size_t pos4 = line.find("|", pos3);
-        
-        if (pos1 != string::npos && pos2 != string::npos) {
-            rec.mode = line.substr(0, pos1-3);
-            rec.level = atoi(line.substr(pos1+4, pos2-pos1-7).c_str());
-            rec.p1_score = atoi(line.substr(pos2+3, pos3-pos2-5).c_str());
-            if (pos3 != string::npos)
-                rec.p2_score = atoi(line.substr(pos3+3, pos4-pos3-3).c_str());
-            rec.date = line.substr(pos4+2);
-            records.push_back(rec);
+        if (regex_match(line, m, re)) {
+            ScoreRecord r;
+            r.mode = m[1].str();             // "Snake 1P" / "Snake 2P"
+            r.level = atoi(m[2].str().c_str());
+            r.p1_score = atoi(m[3].str().c_str());
+            r.p2_score = atoi(m[4].str().c_str());
+            r.date = m[5].str();
+            records.push_back(std::move(r));
         }
     }
     return records;
@@ -940,55 +932,140 @@ void* th_input(void* arg) {
     return nullptr;
 }
 
-// HILO 4: Renderizado
 void* th_render(void* arg) {
     while (true) {
+        // --- 1) Snapshot bajo mtx_state ---
+        bool running, paused, showNL; 
+        int levelSnap, speedSnap, timeSnap, modeSnap;
+        Coord foodSnap;
+        vector<Coord> trapsSnap;
+        SnakeState s1Snap, s2Snap;
+        vector<PowerUp> powerupsSnap;
+        vector<FloatingText> floatingSnap;
+        vector<Particle> particlesSnap;
+
         pthread_mutex_lock(&mtx_state);
-        if (!game_running) { pthread_mutex_unlock(&mtx_state); break; }
-        bool paused = game_paused;
-        bool showNL = show_next_level;
+        running = game_running;
+        paused  = game_paused;
+        showNL  = show_next_level;
+        levelSnap = level_;
+        speedSnap = speed_ms;
+        timeSnap  = time_left;
+        modeSnap  = game_mode;
+        foodSnap  = food;
+        trapsSnap = traps;
+        s1Snap    = s1;
+        s2Snap    = s2;
+        powerupsSnap = powerups;
+        floatingSnap = floating_texts;
+        particlesSnap = particles;
         pthread_mutex_unlock(&mtx_state);
-        
+
+        if (!running) break;
+
+        // --- 2) Dibujo bajo mtx_scr ---
         pthread_mutex_lock(&mtx_scr);
         clear();
-        
+
         if (showNL) {
             attron(A_BOLD);
             mvprintw(H/2-1, (W/2)-5, "=== NEXT LEVEL ===");
-            mvprintw(H/2+1, (W/2)-7, "Entrando al nivel %d...", level_);
+            mvprintw(H/2+1, (W/2)-7, "Entrando al nivel %d...", levelSnap);
             attroff(A_BOLD);
         } else {
-            drawBorders(); 
-            drawFood(); 
-            drawTraps();
-            drawPowerUps();
-            drawSnake(s1); 
-            if (game_mode==2) drawSnake(s2);
-            drawFloatingTexts();
-            drawParticles();
+            drawBorders();
+
+            // comida
+            mvaddch(foodSnap.y, foodSnap.x, "@");
+
+            // traps
+            for (auto& t: trapsSnap) {
+                if (timeSnap % 2 == 0) attron(A_BOLD);
+                mvaddch(t.y, t.x, current_theme.trap);
+                if (timeSnap % 2 == 0) attroff(A_BOLD);
+            }
+
+            // powerups
+            for (auto& pu : powerupsSnap) {
+                if (pu.active) {
+                    if ((pu.duration / 10) % 2 == 0) attron(A_REVERSE);
+                    mvaddch(pu.pos.y, pu.pos.x, pu.symbol);
+                    if ((pu.duration / 10) % 2 == 0) attroff(A_REVERSE);
+                }
+            }
+
+            // serpientes
+            auto drawSnapSnake = [&](const SnakeState& s){
+                if (!s.body.empty()) {
+                    attron(A_BOLD);
+                    mvaddch(s.body[0].y, s.body[0].x, getDirectionalHead(s.dir));
+                    attroff(A_BOLD);
+                    for (size_t i=1;i<s.body.size();++i)
+                        mvaddch(s.body[i].y, s.body[i].x, s.bodyCh);
+                }
+            };
+            drawSnapSnake(s1Snap);
+            if (modeSnap==2) drawSnapSnake(s2Snap);
+
+            // textos flotantes
+            for (const auto& ft : floatingSnap) {
+                if (ft.life > 8) attron(A_BOLD);
+                mvprintw(ft.y, ft.x, "%s", ft.text.c_str());
+                if (ft.life > 8) attroff(A_BOLD);
+            }
+
+            // partículas
+            attron(A_DIM);
+            for (const auto& p : particlesSnap) {
+                if (p.x >= 1 && p.x < W-1 && p.y >= 1 && p.y < H-1)
+                    mvaddch((int)p.y, (int)p.x, p.symbol);
+            }
+            attroff(A_DIM);
+
+            // HUD con snapshots
+            int tmp_level = level_;   // HUD usa globals: si quieres 100% snapshot, pasa levelSnap/speedSnap/timeSnap
+            int tmp_speed = speed_ms;
+            int tmp_time  = time_left;
+            int tmp_mode  = game_mode;
+            // puedes también sustituir drawHUD() por una versión que reciba estos valores
             drawHUD();
         }
-        
+
+        if (paused) {
+            attron(A_BOLD | A_REVERSE);
+            mvprintw(H/2, W/2-8, "  JUEGO PAUSADO ");
+            attroff(A_BOLD | A_REVERSE);
+        }
+
         refresh();
         pthread_mutex_unlock(&mtx_scr);
-        
+
         usleep(50 * 1000);
     }
     return nullptr;
 }
 
+
 // HILO 5: Animación de comida
 void* th_food_animator(void* arg) {
+    int pulse = 0;
     while (true) {
         pthread_mutex_lock(&mtx_state);
         if (!game_running) { pthread_mutex_unlock(&mtx_state); break; }
         pthread_mutex_unlock(&mtx_state);
-        
+
+        // Si hubo comida nueva / se comió, realza unos frames
+        if (sem_trywait(&sem_food_ready) == 0) pulse = 6;
+
         food_animation_frame = (food_animation_frame + 1) % 4;
+        if (pulse > 0) { food_animation_frame = 2; pulse--; } // pequeño flash
+
         usleep(200000);
     }
     return nullptr;
 }
+
+   
 
 // HILO 6: Spawner de comida (productor con semáforo)
 void* th_food_spawner(void* arg) {
@@ -1047,26 +1124,25 @@ void* th_timer(void* arg) {
 
 // HILO 8: Regeneración de trampas
 void* th_traps_regen(void* arg) {
+    // Regenera trampas justo cuando sube el nivel
     while (true) {
         pthread_mutex_lock(&mtx_state);
         if (!game_running) { pthread_mutex_unlock(&mtx_state); break; }
-        
-        bool showNL = show_next_level;
-        int desired = maxTrapsForLevel();
-        int current = (int)traps.size();
         pthread_mutex_unlock(&mtx_state);
 
-        if (!showNL && current < desired) {
-            pthread_mutex_lock(&mtx_state);
-            addTrap();
-            pthread_mutex_unlock(&mtx_state);
-            sleep(2);
-        } else {
-            sleep(1);
-        }
+        // espera evento de nivel (posteado por th_timer)
+        sem_wait(&sem_level_change);
+
+        pthread_mutex_lock(&mtx_state);
+        int desired = maxTrapsForLevel();
+        while ((int)traps.size() < desired) addTrap();
+        pthread_mutex_unlock(&mtx_state);
     }
     return nullptr;
 }
+
+    
+
 
 // HILO 9: Spawner de power-ups
 void* th_powerup_spawner(void* arg) {
@@ -1150,10 +1226,12 @@ void init_synchronization() {
 void destroy_synchronization() {
     sem_destroy(&sem_food_ready);
     sem_destroy(&sem_level_change);
-    pthread_mutex_destroy(&mtx_state);
-    pthread_mutex_destroy(&mtx_scr);
-    pthread_cond_destroy(&cond_game_event);
+    //pthread_mutex_destroy(&mtx_state);
+   // pthread_mutex_destroy(&mtx_scr);
+    //pthread_cond_destroy(&cond_game_event);
 }
+// Forward para poder llamarla antes de su definición
+static void stop_game_signal();
 
 void startGame(int mode) {
     game_mode = mode;
@@ -1173,30 +1251,47 @@ void startGame(int mode) {
     pthread_create(&threads[8], nullptr, th_powerup_spawner, nullptr);
     pthread_create(&threads[9], nullptr, th_visual_effects, nullptr);
     
-    while (true) {
-        pthread_mutex_lock(&mtx_state);
-        bool end1P = (game_mode==1 && !s1.alive);
-        bool end2P = (game_mode==2 && !s1.alive && !s2.alive);
-        bool endGame = end1P || end2P;
-        pthread_mutex_unlock(&mtx_state);
-        if (endGame) break;
-        usleep(100*1000);
-    }
-    
+    // Espera a que termine (por muerte o bandera)
+while (true) {
+    pthread_mutex_lock(&mtx_state);
+    bool end1P   = (game_mode==1 && !s1.alive);
+    bool end2P   = (game_mode==2 && !s1.alive && !s2.alive);
+    bool endGame = end1P || end2P || !game_running;
+    pthread_mutex_unlock(&mtx_state);
+    if (endGame) break;
+    usleep(100 * 1000);
+}
+
+// Señal de parada (despierta a hilos bloqueados en sem_wait)
+stop_game_signal();
+
+// Unir hilos (una sola vez; ya creaste 10 arriba)
+for (int i = 0; i < 10; ++i) {
+    pthread_join(threads[i], nullptr);
+}
+
+destroy_synchronization();
+
+// Guardar score y mostrar Game Over
+saveScore(mode==1 ? string("Snake 1P") : string("Snake 2P"));
+bool backToMenu = gameOverScreen();
+if (!backToMenu) quit_program = true;
+
+
+static void stop_game_signal() {
     pthread_mutex_lock(&mtx_state);
     game_running = false;
     pthread_mutex_unlock(&mtx_state);
-    
-    for (int i = 0; i < 10; i++) {
-        pthread_join(threads[i], nullptr);
+
+    // Despertar posibles waiters de semáforos (varias veces por seguridad)
+    for (int i = 0; i < 4; ++i) {
+        sem_post(&sem_level_change);
+        sem_post(&sem_food_ready);
+        // Si en algún lado usas sem_wait sobre otro semáforo, añádelo aquí.
     }
-    
-    destroy_synchronization();
-    
-    saveScore(mode==1 ? string("Snake 1P") : string("Snake 2P"));
-    bool backToMenu = gameOverScreen(); 
-    if (!backToMenu) quit_program = true;
 }
+
+
 
 // ==================================================
 // NCURSES INIT/FIN Y MAIN
