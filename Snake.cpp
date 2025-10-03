@@ -599,9 +599,9 @@ void showInstructions() {
     clear();
     
     attron(A_BOLD);
-    mvprintw(1, 20, "╔════════════════════════════╗");
+    mvprintw(1, 20, "╔═══════════════════════════╗");
     mvprintw(2, 20, "║   INSTRUCCIONES DEL JUEGO  ║");
-    mvprintw(3, 20, "╚════════════════════════════╝");
+    mvprintw(3, 20, "╚═══════════════════════════╝");
     attroff(A_BOLD);
     
     attron(A_BOLD);
@@ -720,7 +720,8 @@ vector<ScoreRecord> loadScores() {
 }
 
 void saveScore(const string& label) {
-    ofstream f("scores.txt", ios::app);
+    ofstream f("scores.txt", ios::
+        app);
     if (!f) return;
     time_t now = time(nullptr);
     f << label << " | lvl:" << level_ << " | p1:" << s1.score << " | p2:" << s2.score
@@ -732,9 +733,9 @@ void showScores() {
     clear();
     
     attron(A_BOLD);
-    mvprintw(1, 15, "╔═══════════════════════════════════╗");
+    mvprintw(1, 15, "╔══════════════════════════════════╗");
     mvprintw(2, 15, "║   PUNTAJES DESTACADOS - TOP 10   ║");
-    mvprintw(3, 15, "╚═══════════════════════════════════╝");
+    mvprintw(3, 15, "╚══════════════════════════════════╝");
     attroff(A_BOLD);
     
     vector<ScoreRecord> records = loadScores();
@@ -749,7 +750,7 @@ void showScores() {
              });
         
         mvprintw(5, 2, "POS  MODO      NIVEL  P1      P2      FECHA");
-        mvprintw(6, 2, "════════════════════════════════════════════════════");
+        mvprintw(6, 2, "══════════════════════════════════════════════════");
         
         int limit = min(10, (int)records.size());
         for (int i = 0; i < limit; ++i) {
@@ -764,7 +765,7 @@ void showScores() {
         }
     }
     
-    mvprintw(20, 2, "════════════════════════════════════════════════════");
+    mvprintw(20, 2, "══════════════════════════════════════════════════");
     mvprintw(21, 20, "Presiona cualquier tecla...");
     refresh();
     getch();
@@ -976,7 +977,7 @@ void* th_render(void* arg) {
             drawBorders();
 
             // comida
-            mvaddch(foodSnap.y, foodSnap.x, "@");
+            mvaddch(foodSnap.y, foodSnap.x, '@');
 
             // traps
             for (auto& t: trapsSnap) {
@@ -1226,12 +1227,19 @@ void init_synchronization() {
 void destroy_synchronization() {
     sem_destroy(&sem_food_ready);
     sem_destroy(&sem_level_change);
-    //pthread_mutex_destroy(&mtx_state);
-   // pthread_mutex_destroy(&mtx_scr);
-    //pthread_cond_destroy(&cond_game_event);
 }
-// Forward para poder llamarla antes de su definición
-static void stop_game_signal();
+
+static void stop_game_signal() {
+    pthread_mutex_lock(&mtx_state);
+    game_running = false;
+    pthread_mutex_unlock(&mtx_state);
+
+    // Despertar posibles waiters de semáforos (varias veces por seguridad)
+    for (int i = 0; i < 4; ++i) {
+        sem_post(&sem_level_change);
+        sem_post(&sem_food_ready);
+    }
+}
 
 void startGame(int mode) {
     game_mode = mode;
@@ -1252,46 +1260,31 @@ void startGame(int mode) {
     pthread_create(&threads[9], nullptr, th_visual_effects, nullptr);
     
     // Espera a que termine (por muerte o bandera)
-while (true) {
-    pthread_mutex_lock(&mtx_state);
-    bool end1P   = (game_mode==1 && !s1.alive);
-    bool end2P   = (game_mode==2 && !s1.alive && !s2.alive);
-    bool endGame = end1P || end2P || !game_running;
-    pthread_mutex_unlock(&mtx_state);
-    if (endGame) break;
-    usleep(100 * 1000);
-}
-
-// Señal de parada (despierta a hilos bloqueados en sem_wait)
-stop_game_signal();
-
-// Unir hilos (una sola vez; ya creaste 10 arriba)
-for (int i = 0; i < 10; ++i) {
-    pthread_join(threads[i], nullptr);
-}
-
-destroy_synchronization();
-
-// Guardar score y mostrar Game Over
-saveScore(mode==1 ? string("Snake 1P") : string("Snake 2P"));
-bool backToMenu = gameOverScreen();
-if (!backToMenu) quit_program = true;
-
-
-static void stop_game_signal() {
-    pthread_mutex_lock(&mtx_state);
-    game_running = false;
-    pthread_mutex_unlock(&mtx_state);
-
-    // Despertar posibles waiters de semáforos (varias veces por seguridad)
-    for (int i = 0; i < 4; ++i) {
-        sem_post(&sem_level_change);
-        sem_post(&sem_food_ready);
-        // Si en algún lado usas sem_wait sobre otro semáforo, añádelo aquí.
+    while (true) {
+        pthread_mutex_lock(&mtx_state);
+        bool end1P   = (game_mode==1 && !s1.alive);
+        bool end2P   = (game_mode==2 && !s1.alive && !s2.alive);
+        bool endGame = end1P || end2P || !game_running;
+        pthread_mutex_unlock(&mtx_state);
+        if (endGame) break;
+        usleep(100 * 1000);
     }
+
+    // Señal de parada (despierta a hilos bloqueados en sem_wait)
+    stop_game_signal();
+
+    // Unir hilos (una sola vez; ya creaste 10 arriba)
+    for (int i = 0; i < 10; ++i) {
+        pthread_join(threads[i], nullptr);
+    }
+
+    destroy_synchronization();
+
+    // Guardar score y mostrar Game Over
+    saveScore(mode==1 ? string("Snake 1P") : string("Snake 2P"));
+    bool backToMenu = gameOverScreen();
+    if (!backToMenu) quit_program = true;
 }
-
-
 
 // ==================================================
 // NCURSES INIT/FIN Y MAIN
